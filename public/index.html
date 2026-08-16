@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Album Collage</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>Spotify Album Collage</h1>
+        <div class="actions">
+          <button id="login">Login with Spotify</button>
+          <button id="refresh">Refresh Collage</button>
+        </div>
+      </header>
+
+      <main>
+        <div id="collage" class="collage"></div>
+      </main>
+
+      <footer>
+        <p>Uses Spotify's <a href="https://developer.spotify.com/" target="_blank">Web API</a>. You must register an app and set redirect URI to <code>http://localhost:8888/callback</code>.</p>
+      </footer>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>
