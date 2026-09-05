@@ -3,6 +3,7 @@ const express = require('express');
 const axios = require('axios');
 const querystring = require('querystring');
 const path = require('path');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 const PORT = process.env.PORT || 8888;
@@ -14,10 +15,40 @@ if (!CLIENT_ID || !CLIENT_SECRET) {
   console.warn('Missing SPOTIFY_CLIENT_ID or SPOTIFY_CLIENT_SECRET in environment');
 }
 
+// Print and validate redirect URI so errors from Spotify are clearer
+console.log(`Effective REDIRECT_URI: ${REDIRECT_URI}`);
+if (typeof REDIRECT_URI === 'string' && REDIRECT_URI.startsWith('http://')) {
+  const host = REDIRECT_URI.replace(/^https?:\/\//, '').split('/')[0];
+  if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
+    console.error('ERROR: REDIRECT_URI is insecure (http) and not localhost.');
+    console.error('Spotify requires HTTPS for non-localhost redirect URIs.');
+    console.error('Use a HTTPS redirect (for example via ngrok) or change REDIRECT_URI to use localhost.');
+    process.exit(1);
+  }
+}
+
+const COOKIE_OPTS = {
+  httpOnly: true,
+  sameSite: 'lax',
+  secure: REDIRECT_URI.startsWith('https://'),
+  path: '/'
+};
+
+app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
 function base64Credentials() {
   return Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
+}
+
+function setTokenCookies(res, { access_token, refresh_token, expires_in }) {
+  const expiresAt = Date.now() + expires_in * 1000;
+  res.cookie('spotify_access_token', access_token, { ...COOKIE_OPTS, maxAge: expires_in * 1000 });
+  res.cookie('spotify_token_expires_at', String(expiresAt), { ...COOKIE_OPTS, maxAge: expires_in * 1000 });
+  if (refresh_token) {
+    // refresh tokens are long-lived; keep for 30 days
+    res.cookie('spotify_refresh_token', refresh_token, { ...COOKIE_OPTS, maxAge: 30 * 24 * 60 * 60 * 1000 });
+  }
 }
 
 app.get('/login', (req, res) => {
@@ -50,28 +81,52 @@ app.get('/callback', async (req, res) => {
       }
     });
 
-    const { access_token, refresh_token, expires_in } = tokenRes.data;
-
-    const html = `<!doctype html>
-<html>
-  <head><meta charset="utf-8"><title>Logged in</title></head>
-  <body>
-    <script>
-      localStorage.setItem('spotify_access_token', '${access_token}');
-      localStorage.setItem('spotify_refresh_token', '${refresh_token}');
-      localStorage.setItem('spotify_token_expires_in', '${expires_in}');
-      window.location = '/';
-    </script>
-    <p>Redirecting...</p>
-  </body>
-</html>`;
-
-    res.send(html);
+    setTokenCookies(res, tokenRes.data);
+    res.redirect('/');
   } catch (err) {
     console.error(err.response?.data || err.message);
     res.status(500).send('Token exchange failed');
   }
 });
+
+app.post('/logout', (req, res) => {
+  res.clearCookie('spotify_access_token', COOKIE_OPTS);
+  res.clearCookie('spotify_token_expires_at', COOKIE_OPTS);
+  res.clearCookie('spotify_refresh_token', COOKIE_OPTS);
+  res.json({ ok: true });
+});
+
+app.get('/api/session', (req, res) => {
+  res.json({ loggedIn: !!req.cookies.spotify_refresh_token });
+});
+
+async function refreshAccessToken(refreshToken) {
+  const tokenRes = await axios.post('https://accounts.spotify.com/api/token', querystring.stringify({
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken
+  }), {
+    headers: {
+      'Authorization': `Basic ${base64Credentials()}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    }
+  });
+  return tokenRes.data;
+}
+
+// Ensures req has a valid, non-expired access token, refreshing it via cookie if needed.
+async function ensureAccessToken(req, res) {
+  const refreshToken = req.cookies.spotify_refresh_token;
+  if (!refreshToken) return null;
+
+  const expiresAt = parseInt(req.cookies.spotify_token_expires_at || '0', 10);
+  const hasValidAccessToken = req.cookies.spotify_access_token && Date.now() < expiresAt - 5000;
+  if (hasValidAccessToken) return req.cookies.spotify_access_token;
+
+  const data = await refreshAccessToken(refreshToken);
+  // Spotify may omit refresh_token on refresh; keep the existing one in that case
+  setTokenCookies(res, { ...data, refresh_token: data.refresh_token || refreshToken });
+  return data.access_token;
+}
 
 async function fetchTopUniqueAlbums(accessToken, needed = 50, maxFetch = 300) {
   const albumMap = new Map();
@@ -100,10 +155,10 @@ async function fetchTopUniqueAlbums(accessToken, needed = 50, maxFetch = 300) {
 }
 
 app.get('/api/top', async (req, res) => {
-  const accessToken = req.headers.authorization?.split(' ')[1] || req.query.access_token;
   const needed = parseInt(req.query.limit || '50', 10);
-  if (!accessToken) return res.status(400).json({ error: 'Missing access token' });
   try {
+    const accessToken = await ensureAccessToken(req, res);
+    if (!accessToken) return res.status(401).json({ error: 'Not logged in' });
     const albums = await fetchTopUniqueAlbums(accessToken, needed);
     res.json({ albums });
   } catch (err) {
