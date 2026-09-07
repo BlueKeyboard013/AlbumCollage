@@ -167,6 +167,30 @@ app.get('/api/top', async (req, res) => {
   }
 });
 
+app.get('/api/search', async (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (!q) return res.json({ tracks: [] });
+  try {
+    const accessToken = await ensureAccessToken(req, res);
+    if (!accessToken) return res.status(401).json({ error: 'Not logged in' });
+    const resp = await axios.get('https://api.spotify.com/v1/search', {
+      params: { q, type: 'track', limit: 10 },
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const tracks = (resp.data.tracks?.items || []).map(t => ({
+      id: t.id,
+      name: t.name,
+      artist: (t.artists || []).map(a => a.name).join(', '),
+      image: t.album?.images?.[0]?.url || null,
+      albumName: t.album?.name || ''
+    }));
+    res.json({ tracks });
+  } catch (err) {
+    console.error(err.response?.data || err.message);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });

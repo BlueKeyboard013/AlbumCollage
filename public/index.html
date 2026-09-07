@@ -14,58 +14,38 @@
           <button id="login">Login with Spotify</button>
           <button id="logout" hidden>Logout</button>
           <button id="refresh">Refresh Collage</button>
+          <button id="scratch">Start from Scratch</button>
           <button id="download">Download Collage</button>
         </div>
       </header>
 
       <div class="controls">
-        <label>
-          Shape
-          <select id="shape">
-            <option value="square">Square</option>
-            <option value="rectangle">Rectangle</option>
-          </select>
-        </label>
+        <div class="preset-group">
+          <span class="preset-label">Poster size</span>
+          <div class="preset-buttons">
+            <button data-frame="poster:11x17">11 x 17</button>
+            <button data-frame="poster:16x20">16 x 20</button>
+            <button data-frame="poster:18x24">18 x 24</button>
+            <button data-frame="poster:24x36">24 x 36</button>
+          </div>
+        </div>
 
-        <label id="square-size-label">
-          Grid size
-          <select id="square-size">
-            <option value="3">3 x 3</option>
-            <option value="4" selected>4 x 4</option>
-            <option value="5">5 x 5</option>
-            <option value="6">6 x 6</option>
-            <option value="8">8 x 8</option>
-            <option value="10">10 x 10</option>
-          </select>
-        </label>
-
-        <label id="rect-cols-label" hidden>
-          Columns
-          <select id="rect-cols">
-            <option value="3">3</option>
-            <option value="4" selected>4</option>
-            <option value="5">5</option>
-            <option value="6">6</option>
-            <option value="8">8</option>
-          </select>
-        </label>
-
-        <label id="rect-rows-label" hidden>
-          Rows
-          <select id="rect-rows">
-            <option value="2">2</option>
-            <option value="3" selected>3</option>
-            <option value="4">4</option>
-            <option value="5">5</option>
-            <option value="6">6</option>
-          </select>
-        </label>
-
-        <label>
-          Size
-          <input type="range" id="tile-size" min="60" max="220" step="10" value="120">
-        </label>
+        <div class="preset-group">
+          <span class="preset-label">Shape</span>
+          <div class="preset-buttons">
+            <button data-frame="shape:square">Square</button>
+            <button data-frame="shape:circle">Circle</button>
+            <button data-frame="shape:heart">Heart</button>
+            <button data-frame="shape:triangle">Triangle</button>
+          </div>
+        </div>
       </div>
+
+      <div class="search-bar">
+        <input type="text" id="song-search" placeholder="Search for a song to add...">
+        <button id="search-btn">Search</button>
+      </div>
+      <div id="search-results" class="search-results" hidden></div>
 
       <main>
         <div id="collage" class="collage"></div>
@@ -73,6 +53,7 @@
 
       <footer>
         <p>Uses Spotify's <a href="https://developer.spotify.com/" target="_blank">Web API</a>. You must register an app and set redirect URI to <code>http://127.0.0.1:8888/callback</code>.</p>
+        <p>Drag a cover to reposition it, drag a search result onto the collage to add it, and hover a cover to reveal its remove (&times;) button.</p>
       </footer>
     </div>
 
