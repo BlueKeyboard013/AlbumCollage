@@ -1,15 +1,17 @@
-const CONTAINER_MAX = 480; // on-screen px for the longer side of the collage
-const TILE_SIZE = 90;      // fixed on-screen tile size (px)
-const DOWNLOAD_SCALE = 6;  // export resolution multiplier, keeps tiles near native album-art resolution
+const CONTAINER_MAX = 480;    // on-screen px for the longer side of the collage
+const TARGET_TILE_SIZE = 90;  // soft target used only to pick how many tracks to auto-fetch
+const DOWNLOAD_SCALE = 6;     // export resolution multiplier, keeps tiles near native album-art resolution
 
 const HEART_SVG = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><path d='M50 88C20 65 0 45 0 25C0 10 12 0 25 0C35 0 45 6 50 15C55 6 65 0 75 0C88 0 100 10 100 25C100 45 80 65 50 88Z' fill='white'/></svg>`;
 const HEART_MASK_URL = `url("data:image/svg+xml,${encodeURIComponent(HEART_SVG)}")`;
 
 const FRAME_PRESETS = {
-  'poster:11x17': { w: 11, h: 17, clip: 'none', canvasShape: 'rect' },
-  'poster:16x20': { w: 16, h: 20, clip: 'none', canvasShape: 'rect' },
-  'poster:18x24': { w: 18, h: 24, clip: 'none', canvasShape: 'rect' },
-  'poster:24x36': { w: 24, h: 36, clip: 'none', canvasShape: 'rect' },
+  // tileCount is fixed per poster size so the grid always comes out to that exact count
+  // (12/20/24 all reduce cleanly to whole multiples of the poster's aspect ratio, so tiles stay square).
+  'poster:11x17': { w: 11, h: 17, clip: 'none', canvasShape: 'rect', tileCount: 187 },
+  'poster:16x20': { w: 16, h: 20, clip: 'none', canvasShape: 'rect', tileCount: 20 },
+  'poster:18x24': { w: 18, h: 24, clip: 'none', canvasShape: 'rect', tileCount: 12 },
+  'poster:24x36': { w: 24, h: 36, clip: 'none', canvasShape: 'rect', tileCount: 24 },
   'shape:square': { w: 1, h: 1, clip: 'none', canvasShape: 'rect' },
   'shape:circle': { w: 1, h: 1, clip: 'circle(50% at 50% 50%)', canvasShape: 'circle' },
   'shape:triangle': { w: 1, h: 1, clip: 'polygon(50% 0%, 100% 100%, 0% 100%)', canvasShape: 'triangle' },
@@ -18,8 +20,8 @@ const FRAME_PRESETS = {
 
 let currentFrameKey = 'poster:18x24';
 let currentFrame = FRAME_PRESETS[currentFrameKey];
-let arrangement = []; // { uid, image, name, x, y }
-let dragOffset = { x: 0, y: 0 };
+let arrangement = []; // { uid, image, name } — order maps onto the justified grid, left-to-right, top-to-bottom
+let usingTopTracks = false; // true when arrangement was auto-filled from Spotify top tracks (vs. manually built)
 
 function uid() {
   return (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
@@ -45,21 +47,65 @@ function computeContainerSize(frame) {
   return { width: CONTAINER_MAX * ratio, height: CONTAINER_MAX };
 }
 
+function gcd(a, b) {
+  return b === 0 ? a : gcd(b, a % b);
+}
+
+// The smallest cols:rows ratio that exactly matches the frame's aspect ratio.
+// A grid must be a whole multiple of this ratio for tiles to come out square
+// (e.g. an 18x24 poster reduces to 3:4, so 3x4, 6x8, 9x12... all give square tiles).
+function getGridRatio(frame) {
+  const g = gcd(frame.w, frame.h);
+  return { a: frame.w / g, b: frame.h / g };
+}
+
+// Square-tile grid: picks the smallest whole multiple of the frame's reduced
+// aspect ratio that has at least `count` cells, so every tile is the same
+// size (width === height) and the grid still tiles the frame exactly.
+function computeSquareGrid(count, containerW, containerH, frame) {
+  const { a, b } = getGridRatio(frame);
+  const unit = a * b;
+  let m = Math.max(1, Math.ceil(Math.sqrt(Math.max(count, 1) / unit)));
+  while (m * m * unit < count) m++;
+  const cols = m * a;
+  const rows = m * b;
+  const tileSize = containerW / cols; // equals containerH / rows exactly, since cols:rows === containerW:containerH
+  return { cols, rows, tileSize, capacity: cols * rows };
+}
+
+function computeLayout(count, containerW, containerH, frame) {
+  const grid = computeSquareGrid(count, containerW, containerH, frame);
+  const positions = [];
+  for (let i = 0; i < count; i++) {
+    const col = i % grid.cols;
+    const row = Math.floor(i / grid.cols);
+    positions.push({ x: col * grid.tileSize, y: row * grid.tileSize, width: grid.tileSize, height: grid.tileSize });
+  }
+  return positions;
+}
+
+// How many albums to auto-fetch so the grid comes out both square-tiled and full (no empty cells).
+function desiredFetchCount(containerW, frame) {
+  if (frame.tileCount) return frame.tileCount;
+  const { a, b } = getGridRatio(frame);
+  const m = Math.max(1, Math.round(containerW / (a * TARGET_TILE_SIZE)));
+  return m * a * m * b;
+}
+
 function updatePresetButtons() {
   document.querySelectorAll('[data-frame]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.frame === currentFrameKey);
   });
 }
 
-function applyFrame(frameKey) {
-  const oldSize = computeContainerSize(currentFrame);
+async function applyFrame(frameKey) {
   currentFrame = FRAME_PRESETS[frameKey];
   currentFrameKey = frameKey;
-  const newSize = computeContainerSize(currentFrame);
+  const size = computeContainerSize(currentFrame);
 
   const container = document.getElementById('collage');
-  container.style.width = `${newSize.width}px`;
-  container.style.height = `${newSize.height}px`;
+  container.style.width = `${size.width}px`;
+  container.style.height = `${size.height}px`;
   container.style.clipPath = currentFrame.clip || 'none';
   if (currentFrame.mask) {
     container.style.webkitMaskImage = currentFrame.mask;
@@ -73,34 +119,57 @@ function applyFrame(frameKey) {
     container.style.maskImage = 'none';
   }
 
-  if (oldSize.width > 0 && oldSize.height > 0) {
-    arrangement.forEach(t => {
-      t.x = t.x * (newSize.width / oldSize.width);
-      t.y = t.y * (newSize.height / oldSize.height);
-    });
-  }
-
-  renderCollage();
   updatePresetButtons();
+
+  if (usingTopTracks) {
+    // Re-pull the right number of top tracks for this frame's target tile count.
+    await loadTopTracks();
+  } else {
+    // Manually built collage: keep every existing pick, but pad or trim to this frame's target count.
+    const targetCount = desiredFetchCount(size.width, currentFrame);
+    await padOrTrimArrangement(targetCount);
+    renderCollage();
+  }
+}
+
+// Keeps all existing tiles, adding more top tracks (skipping ones already on the collage)
+// or trimming extras from the end, so the count matches `targetCount` exactly when possible.
+async function padOrTrimArrangement(targetCount) {
+  if (arrangement.length === targetCount) return;
+  if (arrangement.length > targetCount) {
+    arrangement = arrangement.slice(0, targetCount);
+    return;
+  }
+  const extra = targetCount - arrangement.length;
+  const existingImages = new Set(arrangement.map(t => t.image));
+  const albums = await fetchAlbums(targetCount + arrangement.length);
+  if (!albums) return; // not logged in — leave the collage short rather than fail
+  const fresh = albums.filter(a => !existingImages.has(a.image)).slice(0, extra);
+  fresh.forEach(a => arrangement.push({ uid: uid(), image: a.image, name: a.name }));
 }
 
 function renderCollage() {
   const container = document.getElementById('collage');
   container.innerHTML = '';
 
-  arrangement.forEach(tile => {
+  const size = computeContainerSize(currentFrame);
+  const positions = computeLayout(arrangement.length, size.width, size.height, currentFrame);
+
+  arrangement.forEach((tile, i) => {
+    const pos = positions[i];
     const div = document.createElement('div');
     div.className = 'tile';
-    div.style.left = `${tile.x}px`;
-    div.style.top = `${tile.y}px`;
-    div.style.width = `${TILE_SIZE}px`;
-    div.style.height = `${TILE_SIZE}px`;
+    div.style.left = `${pos.x}px`;
+    div.style.top = `${pos.y}px`;
+    div.style.width = `${pos.width}px`;
+    div.style.height = `${pos.height}px`;
     div.draggable = true;
     div.dataset.uid = tile.uid;
 
     const img = document.createElement('img');
     img.src = tile.image || '';
     img.alt = tile.name || '';
+    img.draggable = false; // let the parent .tile div's dragstart handle it, not the browser's native image drag
     div.appendChild(img);
 
     const removeBtn = document.createElement('button');
@@ -117,7 +186,6 @@ function renderCollage() {
     div.appendChild(removeBtn);
 
     div.addEventListener('dragstart', (e) => {
-      dragOffset = { x: e.offsetX, y: e.offsetY };
       e.dataTransfer.setData('application/x-tile-uid', tile.uid);
       e.dataTransfer.effectAllowed = 'move';
       div.classList.add('dragging');
@@ -128,40 +196,38 @@ function renderCollage() {
   });
 }
 
-function clampToContainer(x, y, rect) {
-  return {
-    x: Math.max(0, Math.min(x, rect.width - TILE_SIZE)),
-    y: Math.max(0, Math.min(y, rect.height - TILE_SIZE))
-  };
-}
-
 function setupCollageDropTarget() {
   const collageEl = document.getElementById('collage');
+  collageEl.addEventListener('dragenter', (e) => { e.preventDefault(); });
   collageEl.addEventListener('dragover', (e) => {
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
+    // dropEffect must match the drag source's effectAllowed or some browsers refuse the drop entirely.
+    e.dataTransfer.dropEffect = e.dataTransfer.types.includes('application/x-new-track') ? 'copy' : 'move';
   });
   collageEl.addEventListener('drop', (e) => {
     e.preventDefault();
-    const rect = collageEl.getBoundingClientRect();
+
+    const targetTileDiv = document.elementFromPoint(e.clientX, e.clientY)?.closest('.tile') || null;
+    const targetUid = targetTileDiv ? targetTileDiv.dataset.uid : null;
+    const targetIndex = targetUid ? arrangement.findIndex(t => t.uid === targetUid) : -1;
 
     const existingUid = e.dataTransfer.getData('application/x-tile-uid');
     if (existingUid) {
-      const tile = arrangement.find(t => t.uid === existingUid);
-      if (tile) {
-        const pos = clampToContainer(e.clientX - rect.left - dragOffset.x, e.clientY - rect.top - dragOffset.y, rect);
-        tile.x = pos.x;
-        tile.y = pos.y;
-        renderCollage();
-      }
+      const fromIndex = arrangement.findIndex(t => t.uid === existingUid);
+      if (fromIndex === -1 || targetIndex === -1 || targetIndex === fromIndex) return;
+      // Swap the two tiles' contents — positions stay part of the same clean grid.
+      [arrangement[fromIndex], arrangement[targetIndex]] = [arrangement[targetIndex], arrangement[fromIndex]];
+      renderCollage();
       return;
     }
 
     const newTrackRaw = e.dataTransfer.getData('application/x-new-track');
     if (newTrackRaw) {
       const info = JSON.parse(newTrackRaw);
-      const pos = clampToContainer(e.clientX - rect.left - TILE_SIZE / 2, e.clientY - rect.top - TILE_SIZE / 2, rect);
-      arrangement.push({ uid: uid(), image: info.image, name: info.name, x: pos.x, y: pos.y });
+      const newTile = { uid: uid(), image: info.image, name: info.name };
+      if (targetIndex === -1) arrangement.push(newTile);
+      else arrangement.splice(targetIndex, 0, newTile);
+      usingTopTracks = false;
       renderCollage();
     }
   });
@@ -215,12 +281,15 @@ async function downloadCollage() {
   ctx.imageSmoothingQuality = 'high';
   applyCanvasClip(ctx, currentFrame, canvas.width, canvas.height);
 
+  // Compute the grid directly at export resolution so tiles line up pixel-perfectly, edge to edge.
+  const positions = computeLayout(arrangement.length, canvas.width, canvas.height, currentFrame);
+
   try {
     const images = await Promise.all(arrangement.map(t => (t.image ? loadImage(t.image) : null)));
     images.forEach((img, i) => {
       if (!img) return;
-      const t = arrangement[i];
-      ctx.drawImage(img, t.x * DOWNLOAD_SCALE, t.y * DOWNLOAD_SCALE, TILE_SIZE * DOWNLOAD_SCALE, TILE_SIZE * DOWNLOAD_SCALE);
+      const pos = positions[i];
+      ctx.drawImage(img, pos.x, pos.y, pos.width, pos.height);
     });
 
     canvas.toBlob((blob) => {
@@ -238,24 +307,19 @@ async function downloadCollage() {
 }
 
 async function loadTopTracks() {
-  const container = document.getElementById('collage');
   const size = computeContainerSize(currentFrame);
-  const cols = Math.max(1, Math.floor(size.width / TILE_SIZE));
-  const rows = Math.max(1, Math.floor(size.height / TILE_SIZE));
-  const needed = cols * rows;
+  const needed = desiredFetchCount(size.width, currentFrame);
 
   const albums = await fetchAlbums(needed);
   if (!albums) {
     alert('Not logged in. Click "Login with Spotify" first.');
     return;
   }
-  arrangement = albums.slice(0, needed).map((a, i) => ({
-    uid: uid(),
-    image: a.image,
-    name: a.name,
-    x: (i % cols) * TILE_SIZE,
-    y: Math.floor(i / cols) * TILE_SIZE
-  }));
+  if (albums.length < needed) {
+    console.warn(`Only found ${albums.length} unique top albums; requested ${needed} for an exact square-tile fill.`);
+  }
+  arrangement = albums.slice(0, needed).map(a => ({ uid: uid(), image: a.image, name: a.name }));
+  usingTopTracks = true;
   renderCollage();
 }
 
@@ -294,6 +358,7 @@ function renderSearchResults(tracks) {
     const img = document.createElement('img');
     img.src = t.image || '';
     img.alt = t.name;
+    img.draggable = false; // let the parent .search-result div's dragstart handle it, not the browser's native image drag
 
     const label = document.createElement('span');
     label.textContent = `${t.name} — ${t.artist}`;
@@ -322,12 +387,14 @@ async function init() {
   document.getElementById('logout').addEventListener('click', async () => {
     await fetch('/logout', { method: 'POST' });
     arrangement = [];
+    usingTopTracks = false;
     renderCollage();
     await updateLoginUI();
   });
   document.getElementById('refresh').addEventListener('click', loadTopTracks);
   document.getElementById('scratch').addEventListener('click', () => {
     arrangement = [];
+    usingTopTracks = false;
     renderCollage();
   });
   document.getElementById('download').addEventListener('click', downloadCollage);
@@ -342,7 +409,7 @@ async function init() {
   });
 
   setupCollageDropTarget();
-  applyFrame(currentFrameKey);
+  await applyFrame(currentFrameKey); // sizes/clips the container; no-op refetch since usingTopTracks is still false here
 
   const loggedIn = await updateLoginUI();
   if (loggedIn) {
