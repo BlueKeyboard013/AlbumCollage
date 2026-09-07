@@ -1,4 +1,8 @@
 const GRID_GAP = 6; // must match --gap in styles.css
+const DOWNLOAD_TILE_SIZE = 600; // fixed high-res tile size for exported PNG, independent of on-screen size
+
+let cachedAlbums = null; // full fetched list from the API
+let arrangement = [];    // current on-screen order/positions, length === cols*rows
 
 async function isLoggedIn() {
   const resp = await fetch('/api/session');
@@ -26,21 +30,41 @@ function getGridConfig() {
   return { cols, rows, tileSize };
 }
 
-function renderCollage(albums, gridConfig) {
+function renderCollage(gridConfig) {
   const { cols, rows, tileSize } = gridConfig;
   const container = document.getElementById('collage');
   container.innerHTML = '';
   container.style.gridTemplateColumns = `repeat(${cols}, ${tileSize}px)`;
   container.style.gridAutoRows = `${tileSize}px`;
 
-  const needed = cols * rows;
-  const slice = albums.slice(0, needed);
-  for (const a of slice) {
+  arrangement.forEach((a, i) => {
     const img = document.createElement('img');
-    img.src = a.image || '';
-    img.alt = a.name || '';
+    img.src = (a && a.image) || '';
+    img.alt = (a && a.name) || '';
+    img.draggable = true;
+    img.dataset.index = String(i);
+
+    img.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', String(i));
+      e.dataTransfer.effectAllowed = 'move';
+      img.classList.add('dragging');
+    });
+    img.addEventListener('dragend', () => img.classList.remove('dragging'));
+    img.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    });
+    img.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const fromIndex = parseInt(e.dataTransfer.getData('text/plain'), 10);
+      const toIndex = i;
+      if (Number.isNaN(fromIndex) || fromIndex === toIndex) return;
+      [arrangement[fromIndex], arrangement[toIndex]] = [arrangement[toIndex], arrangement[fromIndex]];
+      renderCollage(gridConfig);
+    });
+
     container.appendChild(img);
-  }
+  });
 }
 
 function loadImage(url) {
@@ -54,26 +78,27 @@ function loadImage(url) {
 }
 
 async function downloadCollage() {
-  if (!cachedAlbums || !cachedAlbums.length) {
+  if (!arrangement.length) {
     alert('Load a collage first.');
     return;
   }
-  const gridConfig = getGridConfig();
-  const { cols, rows, tileSize } = gridConfig;
-  const slice = cachedAlbums.slice(0, cols * rows);
+  const { cols, rows } = getGridConfig();
 
+  // No gaps and a fixed high-res tile size, independent of the on-screen preview size.
   const canvas = document.createElement('canvas');
-  canvas.width = cols * tileSize + (cols - 1) * GRID_GAP;
-  canvas.height = rows * tileSize + (rows - 1) * GRID_GAP;
+  canvas.width = cols * DOWNLOAD_TILE_SIZE;
+  canvas.height = rows * DOWNLOAD_TILE_SIZE;
   const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
 
   try {
-    const images = await Promise.all(slice.map(a => a.image ? loadImage(a.image) : null));
+    const images = await Promise.all(arrangement.map(a => (a && a.image) ? loadImage(a.image) : null));
     images.forEach((img, i) => {
       if (!img) return;
-      const x = (i % cols) * (tileSize + GRID_GAP);
-      const y = Math.floor(i / cols) * (tileSize + GRID_GAP);
-      ctx.drawImage(img, x, y, tileSize, tileSize);
+      const x = (i % cols) * DOWNLOAD_TILE_SIZE;
+      const y = Math.floor(i / cols) * DOWNLOAD_TILE_SIZE;
+      ctx.drawImage(img, x, y, DOWNLOAD_TILE_SIZE, DOWNLOAD_TILE_SIZE);
     });
 
     canvas.toBlob((blob) => {
@@ -98,8 +123,6 @@ function updateShapeControls() {
   document.getElementById('rect-rows-label').hidden = isSquare;
 }
 
-let cachedAlbums = null;
-
 async function loadAndRender() {
   try {
     const gridConfig = getGridConfig();
@@ -112,7 +135,8 @@ async function loadAndRender() {
       }
       cachedAlbums = albums;
     }
-    renderCollage(cachedAlbums, gridConfig);
+    arrangement = cachedAlbums.slice(0, needed);
+    renderCollage(gridConfig);
   } catch (err) {
     console.error(err);
     alert('Failed to load albums. Check console.');
@@ -141,6 +165,7 @@ async function init() {
   logoutBtn.addEventListener('click', async () => {
     await fetch('/logout', { method: 'POST' });
     cachedAlbums = null;
+    arrangement = [];
     document.getElementById('collage').innerHTML = '';
     await updateLoginUI();
   });
@@ -152,7 +177,7 @@ async function init() {
   rectCols.addEventListener('change', loadAndRender);
   rectRows.addEventListener('change', loadAndRender);
   tileSize.addEventListener('input', () => {
-    if (cachedAlbums) renderCollage(cachedAlbums, getGridConfig());
+    if (arrangement.length) renderCollage(getGridConfig());
   });
 
   updateShapeControls();
