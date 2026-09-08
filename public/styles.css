@@ -22,14 +22,38 @@ header{display:flex;align-items:center;justify-content:space-between;flex-wrap:w
 .search-result:active{cursor:grabbing}
 .search-result img{width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0}
 
-.collage{position:relative;margin:16px auto 0;background:#f0f0f0;border:1px solid #ddd}
+.tabs{display:flex;gap:8px;align-items:center;margin-top:16px}
+.tab-btn{padding:8px 14px;border-radius:6px 6px 0 0;border:1px solid #ccc;border-bottom:none;background:#eee;cursor:pointer;font-size:14px}
+.tab-btn.active{background:white;font-weight:600}
+#playground-reset{margin-left:auto;padding:6px 10px;border-radius:6px;border:1px solid #ccc;background:white;cursor:pointer;font-size:13px}
+
+.collage{position:relative;z-index:0;margin:16px auto 0;background:#f0f0f0;border:1px solid #ddd}
 
 .tile{position:absolute;cursor:grab}
 .tile:active{cursor:grabbing}
 .tile img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;border-radius:2px}
-.tile .remove-btn{position:absolute;top:2px;right:2px;width:18px;height:18px;line-height:16px;text-align:center;border-radius:50%;border:none;background:rgba(0,0,0,0.65);color:white;font-size:12px;cursor:pointer;opacity:0;transition:opacity .15s;padding:0}
+.tile .remove-btn{position:absolute;top:2px;right:2px;width:18px;height:18px;line-height:16px;text-align:center;border-radius:50%;border:none;background:rgba(0,0,0,0.65);color:white;font-size:12px;cursor:pointer;opacity:0;transition:opacity .15s;padding:0;z-index:2}
 .tile:hover .remove-btn{opacity:1}
 .tile.dragging{opacity:0.4}
+
+/* Playground tiles have no on-tile buttons — clicking/dragging just selects the tile,
+   and the side panel (#playground-panel) acts on whichever tile is currently selected.
+   Selecting a tile only marks it visually (outline) — it must NOT change its stacking
+   order, so front/back panel actions stay visible immediately while it's selected. */
+.tile.playground-tile{touch-action:none;cursor:move}
+.tile.playground-tile.selected{outline:3px solid #1db954;outline-offset:-3px}
+
+.playground-wrap{display:flex;gap:16px;align-items:flex-start;margin-top:16px}
+.playground-wrap .collage{margin:0}
+.playground-panel{width:200px;flex-shrink:0;padding:14px;background:white;border:1px solid #eee;border-radius:8px}
+.playground-panel h3{margin:0 0 10px;font-size:14px}
+.panel-empty{margin:0;font-size:13px;color:#777}
+.panel-controls{display:flex;flex-direction:column;gap:8px}
+.panel-controls button{padding:8px 10px;border-radius:6px;border:1px solid #ccc;background:white;cursor:pointer;font-size:13px;text-align:left}
+.panel-size-row{display:flex;align-items:center;gap:8px;font-size:13px}
+.panel-size-row span{flex:1}
+.panel-size-row button{width:28px;height:28px;padding:0;border-radius:6px;border:1px solid #ccc;background:white;cursor:pointer;font-size:16px;line-height:1;display:flex;align-items:center;justify-content:center}
+.panel-remove{border-color:#e33;color:#e33}
 
 footer{margin-top:18px;font-size:13px;color:#555}
 

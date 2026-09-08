@@ -18,10 +18,17 @@ const FRAME_PRESETS = {
   'shape:heart': { w: 1, h: 1, clip: 'none', mask: HEART_MASK_URL, canvasShape: 'heart' }
 };
 
+const MIN_PLAYGROUND_TILE = 30; // smallest a tile can be resized to in Playground mode
+
 let currentFrameKey = 'poster:18x24';
 let currentFrame = FRAME_PRESETS[currentFrameKey];
+let currentTimeRange = 'medium_term';
 let arrangement = []; // { uid, image, name } — order maps onto the justified grid, left-to-right, top-to-bottom
 let usingTopTracks = false; // true when arrangement was auto-filled from Spotify top tracks (vs. manually built)
+
+let activeTab = 'auto'; // 'auto' | 'playground'
+let playgroundArrangement = []; // { uid, image, name, x, y, width, height } — free position/size, independent per tile
+let playgroundInitialized = false;
 
 function uid() {
   return (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
@@ -34,7 +41,7 @@ async function isLoggedIn() {
 }
 
 async function fetchAlbums(limit) {
-  const resp = await fetch(`/api/top?limit=${limit}`);
+  const resp = await fetch(`/api/top?limit=${limit}&time_range=${currentTimeRange}`);
   if (resp.status === 401) return null;
   if (!resp.ok) throw new Error('Failed to fetch');
   const data = await resp.json();
@@ -62,7 +69,7 @@ function getGridRatio(frame) {
 // Square-tile grid: picks the smallest whole multiple of the frame's reduced
 // aspect ratio that has at least `count` cells, so every tile is the same
 // size (width === height) and the grid still tiles the frame exactly.
-function computeSquareGrid(count, containerW, containerH, frame) {
+function computeSquareGrid(count, containerW, frame) {
   const { a, b } = getGridRatio(frame);
   const unit = a * b;
   let m = Math.max(1, Math.ceil(Math.sqrt(Math.max(count, 1) / unit)));
@@ -73,8 +80,8 @@ function computeSquareGrid(count, containerW, containerH, frame) {
   return { cols, rows, tileSize, capacity: cols * rows };
 }
 
-function computeLayout(count, containerW, containerH, frame) {
-  const grid = computeSquareGrid(count, containerW, containerH, frame);
+function computeLayout(count, containerW, frame) {
+  const grid = computeSquareGrid(count, containerW, frame);
   const positions = [];
   for (let i = 0; i < count; i++) {
     const col = i % grid.cols;
@@ -98,18 +105,13 @@ function updatePresetButtons() {
   });
 }
 
-async function applyFrame(frameKey) {
-  currentFrame = FRAME_PRESETS[frameKey];
-  currentFrameKey = frameKey;
-  const size = computeContainerSize(currentFrame);
-
-  const container = document.getElementById('collage');
+function applyFrameStyle(container, frame, size) {
   container.style.width = `${size.width}px`;
   container.style.height = `${size.height}px`;
-  container.style.clipPath = currentFrame.clip || 'none';
-  if (currentFrame.mask) {
-    container.style.webkitMaskImage = currentFrame.mask;
-    container.style.maskImage = currentFrame.mask;
+  container.style.clipPath = frame.clip || 'none';
+  if (frame.mask) {
+    container.style.webkitMaskImage = frame.mask;
+    container.style.maskImage = frame.mask;
     container.style.webkitMaskSize = '100% 100%';
     container.style.maskSize = '100% 100%';
     container.style.webkitMaskRepeat = 'no-repeat';
@@ -117,6 +119,25 @@ async function applyFrame(frameKey) {
   } else {
     container.style.webkitMaskImage = 'none';
     container.style.maskImage = 'none';
+  }
+}
+
+async function applyFrame(frameKey) {
+  const oldSize = computeContainerSize(currentFrame);
+  currentFrame = FRAME_PRESETS[frameKey];
+  currentFrameKey = frameKey;
+  const size = computeContainerSize(currentFrame);
+
+  applyFrameStyle(document.getElementById('collage'), currentFrame, size);
+  applyFrameStyle(document.getElementById('collage-playground'), currentFrame, size);
+
+  if (playgroundInitialized && oldSize.width > 0 && oldSize.height > 0) {
+    const scaleX = size.width / oldSize.width;
+    const scaleY = size.height / oldSize.height;
+    playgroundArrangement.forEach(t => {
+      t.x *= scaleX; t.y *= scaleY; t.width *= scaleX; t.height *= scaleY;
+    });
+    renderPlayground();
   }
 
   updatePresetButtons();
@@ -153,7 +174,7 @@ function renderCollage() {
   container.innerHTML = '';
 
   const size = computeContainerSize(currentFrame);
-  const positions = computeLayout(arrangement.length, size.width, size.height, currentFrame);
+  const positions = computeLayout(arrangement.length, size.width, currentFrame);
 
   arrangement.forEach((tile, i) => {
     const pos = positions[i];
@@ -233,6 +254,196 @@ function setupCollageDropTarget() {
   });
 }
 
+// ---- Playground: free positioning + independent per-tile resizing ----
+// No on-tile buttons here — clicking or dragging a tile only selects it, and the side
+// panel (#playground-panel) acts on whichever tile is currently selected. That sidesteps
+// the earlier problem entirely: a covered tile's controls can never become unreachable,
+// because they're never rendered on the tile in the first place.
+
+const PLAYGROUND_SIZE_STEP = 10;
+let selectedPlaygroundUid = null;
+
+function initPlaygroundFromAutomated() {
+  const size = computeContainerSize(currentFrame);
+  const positions = computeLayout(arrangement.length, size.width, currentFrame);
+  playgroundArrangement = arrangement.map((tile, i) => ({
+    uid: uid(),
+    image: tile.image,
+    name: tile.name,
+    x: positions[i].x,
+    y: positions[i].y,
+    width: positions[i].width,
+    height: positions[i].height,
+    z: i
+  }));
+  playgroundInitialized = true;
+  selectedPlaygroundUid = null;
+  renderPlayground();
+  updatePlaygroundPanel();
+}
+
+function bringTileToFront(tile) {
+  const maxZ = Math.max(0, ...playgroundArrangement.map(t => t.z || 0));
+  tile.z = maxZ + 1;
+}
+
+function sendTileToBack(tile) {
+  const minZ = Math.min(0, ...playgroundArrangement.map(t => t.z || 0));
+  tile.z = minZ - 1;
+}
+
+function getSelectedPlaygroundTile() {
+  return playgroundArrangement.find(t => t.uid === selectedPlaygroundUid) || null;
+}
+
+// Lightweight selection update used during click/drag-start: just toggles the 'selected'
+// class and refreshes the panel, without a full re-render that would disrupt an in-progress drag.
+function selectPlaygroundTile(tileUid) {
+  selectedPlaygroundUid = tileUid;
+  document.querySelectorAll('#collage-playground .tile.selected').forEach(el => el.classList.remove('selected'));
+  if (tileUid) {
+    const el = document.querySelector(`#collage-playground .tile[data-uid="${tileUid}"]`);
+    if (el) el.classList.add('selected');
+  }
+  updatePlaygroundPanel();
+}
+
+function updatePlaygroundPanel() {
+  const tile = getSelectedPlaygroundTile();
+  document.getElementById('panel-empty').hidden = !!tile;
+  document.getElementById('panel-controls').hidden = !tile;
+}
+
+function renderPlayground() {
+  const container = document.getElementById('collage-playground');
+  container.innerHTML = '';
+
+  playgroundArrangement.forEach(tile => {
+    const div = document.createElement('div');
+    div.className = 'tile playground-tile' + (tile.uid === selectedPlaygroundUid ? ' selected' : '');
+    div.style.left = `${tile.x}px`;
+    div.style.top = `${tile.y}px`;
+    div.style.width = `${tile.width}px`;
+    div.style.height = `${tile.height}px`;
+    div.style.zIndex = String(tile.z || 0);
+    div.dataset.uid = tile.uid;
+
+    const img = document.createElement('img');
+    img.src = tile.image || '';
+    img.alt = tile.name || '';
+    img.draggable = false;
+    div.appendChild(img);
+
+    div.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      selectPlaygroundTile(tile.uid);
+
+      const containerRect = container.getBoundingClientRect();
+      const startClientX = e.clientX, startClientY = e.clientY;
+      const startLeft = tile.x, startTop = tile.y;
+      div.setPointerCapture(e.pointerId);
+      div.classList.add('dragging');
+
+      const onMove = (ev) => {
+        const dx = ev.clientX - startClientX, dy = ev.clientY - startClientY;
+        const newX = Math.max(0, Math.min(startLeft + dx, containerRect.width - tile.width));
+        const newY = Math.max(0, Math.min(startTop + dy, containerRect.height - tile.height));
+        tile.x = newX; tile.y = newY;
+        div.style.left = `${newX}px`;
+        div.style.top = `${newY}px`;
+      };
+      const onUp = () => {
+        div.classList.remove('dragging');
+        div.removeEventListener('pointermove', onMove);
+        div.removeEventListener('pointerup', onUp);
+      };
+      div.addEventListener('pointermove', onMove);
+      div.addEventListener('pointerup', onUp);
+    });
+
+    container.appendChild(div);
+  });
+}
+
+function setupPlaygroundDropTarget() {
+  const el = document.getElementById('collage-playground');
+  el.addEventListener('dragenter', (e) => { e.preventDefault(); });
+  el.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  el.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const newTrackRaw = e.dataTransfer.getData('application/x-new-track');
+    if (!newTrackRaw) return;
+    const info = JSON.parse(newTrackRaw);
+    const rect = el.getBoundingClientRect();
+    const size = TARGET_TILE_SIZE;
+    const x = Math.max(0, Math.min(e.clientX - rect.left - size / 2, rect.width - size));
+    const y = Math.max(0, Math.min(e.clientY - rect.top - size / 2, rect.height - size));
+    const maxZ = Math.max(0, ...playgroundArrangement.map(t => t.z || 0));
+    const newTile = { uid: uid(), image: info.image, name: info.name, x, y, width: size, height: size, z: maxZ + 1 };
+    playgroundArrangement.push(newTile);
+    selectedPlaygroundUid = newTile.uid;
+    renderPlayground();
+    updatePlaygroundPanel();
+  });
+}
+
+function setupPlaygroundPanel() {
+  document.getElementById('panel-front').addEventListener('click', () => {
+    const tile = getSelectedPlaygroundTile();
+    if (!tile) return;
+    bringTileToFront(tile);
+    renderPlayground();
+  });
+
+  document.getElementById('panel-back').addEventListener('click', () => {
+    const tile = getSelectedPlaygroundTile();
+    if (!tile) return;
+    sendTileToBack(tile);
+    renderPlayground();
+  });
+
+  document.getElementById('panel-size-inc').addEventListener('click', () => {
+    const tile = getSelectedPlaygroundTile();
+    if (!tile) return;
+    const size = computeContainerSize(currentFrame);
+    tile.width = Math.min(size.width - tile.x, tile.width + PLAYGROUND_SIZE_STEP);
+    tile.height = Math.min(size.height - tile.y, tile.height + PLAYGROUND_SIZE_STEP);
+    renderPlayground();
+  });
+
+  document.getElementById('panel-size-dec').addEventListener('click', () => {
+    const tile = getSelectedPlaygroundTile();
+    if (!tile) return;
+    tile.width = Math.max(MIN_PLAYGROUND_TILE, tile.width - PLAYGROUND_SIZE_STEP);
+    tile.height = Math.max(MIN_PLAYGROUND_TILE, tile.height - PLAYGROUND_SIZE_STEP);
+    renderPlayground();
+  });
+
+  document.getElementById('panel-remove').addEventListener('click', () => {
+    if (!selectedPlaygroundUid) return;
+    playgroundArrangement = playgroundArrangement.filter(t => t.uid !== selectedPlaygroundUid);
+    selectedPlaygroundUid = null;
+    renderPlayground();
+    updatePlaygroundPanel();
+  });
+}
+
+function setActiveTab(tab) {
+  activeTab = tab;
+  document.getElementById('tab-auto').classList.toggle('active', tab === 'auto');
+  document.getElementById('tab-playground').classList.toggle('active', tab === 'playground');
+  document.getElementById('collage').hidden = tab !== 'auto';
+  document.getElementById('playground-wrap').hidden = tab !== 'playground';
+  document.getElementById('playground-reset').hidden = tab !== 'playground';
+
+  if (tab === 'playground' && !playgroundInitialized) {
+    initPlaygroundFromAutomated();
+  }
+}
+
 function loadImage(url) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -268,7 +479,11 @@ function applyCanvasClip(ctx, frame, w, h) {
 }
 
 async function downloadCollage() {
-  if (!arrangement.length) {
+  // Playground tiles must be drawn in the same back-to-front stacking order shown on screen.
+  const list = activeTab === 'playground'
+    ? [...playgroundArrangement].sort((a, b) => (a.z || 0) - (b.z || 0))
+    : arrangement;
+  if (!list.length) {
     alert('Add some album covers to the collage first.');
     return;
   }
@@ -281,11 +496,13 @@ async function downloadCollage() {
   ctx.imageSmoothingQuality = 'high';
   applyCanvasClip(ctx, currentFrame, canvas.width, canvas.height);
 
-  // Compute the grid directly at export resolution so tiles line up pixel-perfectly, edge to edge.
-  const positions = computeLayout(arrangement.length, canvas.width, canvas.height, currentFrame);
+  // Automated: recompute the exact grid at export resolution. Playground: scale each tile's own free position/size.
+  const positions = activeTab === 'playground'
+    ? list.map(t => ({ x: t.x * DOWNLOAD_SCALE, y: t.y * DOWNLOAD_SCALE, width: t.width * DOWNLOAD_SCALE, height: t.height * DOWNLOAD_SCALE }))
+    : computeLayout(arrangement.length, canvas.width, currentFrame);
 
   try {
-    const images = await Promise.all(arrangement.map(t => (t.image ? loadImage(t.image) : null)));
+    const images = await Promise.all(list.map(t => (t.image ? loadImage(t.image) : null)));
     images.forEach((img, i) => {
       if (!img) return;
       const pos = positions[i];
@@ -388,7 +605,12 @@ async function init() {
     await fetch('/logout', { method: 'POST' });
     arrangement = [];
     usingTopTracks = false;
+    playgroundArrangement = [];
+    playgroundInitialized = false;
+    selectedPlaygroundUid = null;
     renderCollage();
+    renderPlayground();
+    updatePlaygroundPanel();
     await updateLoginUI();
   });
   document.getElementById('refresh').addEventListener('click', loadTopTracks);
@@ -403,12 +625,23 @@ async function init() {
     btn.addEventListener('click', () => applyFrame(btn.dataset.frame));
   });
 
+  document.getElementById('time-range').addEventListener('change', (e) => {
+    currentTimeRange = e.target.value;
+    loadTopTracks();
+  });
+
   document.getElementById('search-btn').addEventListener('click', searchSongs);
   document.getElementById('song-search').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') searchSongs();
   });
 
+  document.getElementById('tab-auto').addEventListener('click', () => setActiveTab('auto'));
+  document.getElementById('tab-playground').addEventListener('click', () => setActiveTab('playground'));
+  document.getElementById('playground-reset').addEventListener('click', initPlaygroundFromAutomated);
+
   setupCollageDropTarget();
+  setupPlaygroundDropTarget();
+  setupPlaygroundPanel();
   await applyFrame(currentFrameKey); // sizes/clips the container; no-op refetch since usingTopTracks is still false here
 
   const loggedIn = await updateLoginUI();

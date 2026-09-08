@@ -39,6 +39,15 @@
             <button data-frame="shape:triangle">Triangle</button>
           </div>
         </div>
+
+        <div class="preset-group">
+          <span class="preset-label">Top tracks from</span>
+          <select id="time-range">
+            <option value="short_term">Last 4 Weeks</option>
+            <option value="medium_term" selected>Last 6 Months</option>
+            <option value="long_term">All Time</option>
+          </select>
+        </div>
       </div>
 
       <div class="search-bar">
@@ -47,13 +56,39 @@
       </div>
       <div id="search-results" class="search-results" hidden></div>
 
+      <div class="tabs">
+        <button id="tab-auto" class="tab-btn active">Automated</button>
+        <button id="tab-playground" class="tab-btn">Playground</button>
+        <button id="playground-reset" hidden>Reset to Automated Layout</button>
+      </div>
+
       <main>
         <div id="collage" class="collage"></div>
+
+        <div id="playground-wrap" class="playground-wrap" hidden>
+          <div id="collage-playground" class="collage"></div>
+
+          <div id="playground-panel" class="playground-panel">
+            <h3>Selected Tile</h3>
+            <p id="panel-empty" class="panel-empty">Click or drag a cover to select it.</p>
+            <div id="panel-controls" class="panel-controls" hidden>
+              <button id="panel-front">⤒ Bring to Front</button>
+              <button id="panel-back">⤓ Send to Back</button>
+              <div class="panel-size-row">
+                <span>Size</span>
+                <button id="panel-size-dec">−</button>
+                <button id="panel-size-inc">+</button>
+              </div>
+              <button id="panel-remove" class="panel-remove">Remove Tile</button>
+            </div>
+          </div>
+        </div>
       </main>
 
       <footer>
         <p>Uses Spotify's <a href="https://developer.spotify.com/" target="_blank">Web API</a>. You must register an app and set redirect URI to <code>http://127.0.0.1:8888/callback</code>.</p>
-        <p>Drag a cover to reposition it, drag a search result onto the collage to add it, and hover a cover to reveal its remove (&times;) button.</p>
+        <p><strong>Automated:</strong> drag a cover to swap its position, drag a search result onto the collage to add it, hover a cover to remove it.</p>
+        <p><strong>Playground:</strong> drag covers anywhere freely. Click or drag a cover to select it, then use the side panel to bring it to front/back, resize it, or remove it.</p>
       </footer>
     </div>
 

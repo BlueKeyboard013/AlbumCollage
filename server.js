@@ -128,12 +128,14 @@ async function ensureAccessToken(req, res) {
   return data.access_token;
 }
 
-async function fetchTopUniqueAlbums(accessToken, needed = 50, maxFetch = 300) {
+const VALID_TIME_RANGES = new Set(['short_term', 'medium_term', 'long_term']);
+
+async function fetchTopUniqueAlbums(accessToken, needed = 50, timeRange = 'medium_term', maxFetch = 300) {
   const albumMap = new Map();
   let offset = 0;
   const limit = 50;
   while (albumMap.size < needed && offset < maxFetch) {
-    const url = `https://api.spotify.com/v1/me/top/tracks?limit=${limit}&offset=${offset}`;
+    const url = `https://api.spotify.com/v1/me/top/tracks?limit=${limit}&offset=${offset}&time_range=${timeRange}`;
     const resp = await axios.get(url, { headers: { Authorization: `Bearer ${accessToken}` } });
     const items = resp.data.items || [];
     if (items.length === 0) break;
@@ -156,10 +158,11 @@ async function fetchTopUniqueAlbums(accessToken, needed = 50, maxFetch = 300) {
 
 app.get('/api/top', async (req, res) => {
   const needed = parseInt(req.query.limit || '50', 10);
+  const timeRange = VALID_TIME_RANGES.has(req.query.time_range) ? req.query.time_range : 'medium_term';
   try {
     const accessToken = await ensureAccessToken(req, res);
     if (!accessToken) return res.status(401).json({ error: 'Not logged in' });
-    const albums = await fetchTopUniqueAlbums(accessToken, needed);
+    const albums = await fetchTopUniqueAlbums(accessToken, needed, timeRange);
     res.json({ albums });
   } catch (err) {
     console.error(err.response?.data || err.message);
