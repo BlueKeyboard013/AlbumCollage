@@ -2,6 +2,8 @@
 
 Small web app that fetches a Spotify user's top tracks and displays a collage of album covers (unique albums only).
 
+Live: https://album-collage.onrender.com/
+
 Prereqs
 - Node.js 18+ (or compatible)
 - A Spotify developer app (Client ID & Client Secret). Set the app's Redirect URI to `http://127.0.0.1:8888/callback` (Spotify no longer accepts `localhost` as a hostname — it must be the literal loopback IP `127.0.0.1`).
