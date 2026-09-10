@@ -30,6 +30,8 @@ let activeTab = 'auto'; // 'auto' | 'playground'
 let playgroundArrangement = []; // { uid, image, name, x, y, width, height } — free position/size, independent per tile
 let playgroundInitialized = false;
 
+let loggedIn = false; // logged-out visitors still get a working collage, seeded from a public top-50 playlist
+
 function uid() {
   return (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 }
@@ -41,7 +43,10 @@ async function isLoggedIn() {
 }
 
 async function fetchAlbums(limit) {
-  const resp = await fetch(`/api/top?limit=${limit}&time_range=${currentTimeRange}`);
+  const url = loggedIn
+    ? `/api/top?limit=${limit}&time_range=${currentTimeRange}`
+    : `/api/public/top?limit=${limit}`;
+  const resp = await fetch(url);
   if (resp.status === 401) return null;
   if (!resp.ok) throw new Error('Failed to fetch');
   const data = await resp.json();
@@ -529,7 +534,7 @@ async function loadTopTracks() {
 
   const albums = await fetchAlbums(needed);
   if (!albums) {
-    alert('Not logged in. Click "Login with Spotify" first.');
+    alert('Failed to load top tracks. Please try again.');
     return;
   }
   if (albums.length < needed) {
@@ -549,11 +554,8 @@ async function searchSongs() {
     return;
   }
   try {
-    const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-    if (resp.status === 401) {
-      alert('Log in with Spotify to search for songs.');
-      return;
-    }
+    const url = loggedIn ? `/api/search?q=${encodeURIComponent(q)}` : `/api/public/search?q=${encodeURIComponent(q)}`;
+    const resp = await fetch(url);
     if (!resp.ok) throw new Error('Search failed');
     const data = await resp.json();
     renderSearchResults(data.tracks || []);
@@ -593,9 +595,10 @@ function renderSearchResults(tracks) {
 }
 
 async function updateLoginUI() {
-  const loggedIn = await isLoggedIn();
+  loggedIn = await isLoggedIn();
   document.getElementById('login').hidden = loggedIn;
   document.getElementById('logout').hidden = !loggedIn;
+  document.getElementById('time-range-group').hidden = !loggedIn;
   return loggedIn;
 }
 
@@ -608,10 +611,10 @@ async function init() {
     playgroundArrangement = [];
     playgroundInitialized = false;
     selectedPlaygroundUid = null;
-    renderCollage();
     renderPlayground();
     updatePlaygroundPanel();
     await updateLoginUI();
+    await loadTopTracks(); // falls back to the public global top-50 now that we're logged out
   });
   document.getElementById('refresh').addEventListener('click', loadTopTracks);
   document.getElementById('scratch').addEventListener('click', () => {
@@ -644,10 +647,8 @@ async function init() {
   setupPlaygroundPanel();
   await applyFrame(currentFrameKey); // sizes/clips the container; no-op refetch since usingTopTracks is still false here
 
-  const loggedIn = await updateLoginUI();
-  if (loggedIn) {
-    await loadTopTracks();
-  }
+  await updateLoginUI();
+  await loadTopTracks(); // seeds from the user's own top tracks if logged in, otherwise the public global top-50
 }
 
 window.addEventListener('DOMContentLoaded', init);

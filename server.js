@@ -128,6 +128,93 @@ async function ensureAccessToken(req, res) {
   return data.access_token;
 }
 
+// App-only (Client Credentials) auth — lets logged-out visitors browse Spotify's public
+// catalog (a global top-tracks playlist, and search) without any per-user login.
+let appAccessToken = null;
+let appTokenExpiresAt = 0;
+
+async function ensureAppAccessToken() {
+  if (appAccessToken && Date.now() < appTokenExpiresAt - 5000) return appAccessToken;
+  const tokenRes = await axios.post('https://accounts.spotify.com/api/token', querystring.stringify({
+    grant_type: 'client_credentials'
+  }), {
+    headers: {
+      'Authorization': `Basic ${base64Credentials()}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    }
+  });
+  appAccessToken = tokenRes.data.access_token;
+  appTokenExpiresAt = Date.now() + tokenRes.data.expires_in * 1000;
+  return appAccessToken;
+}
+
+// Spotify-owned editorial/algorithmic playlists (their official "Top 50 - Global", "Today's Top
+// Hits", etc.) return 404 for apps in Development Mode — Spotify restricted API access to those
+// in a Nov 2024 policy change. This is a well-maintained, high-follower community mirror of the
+// global chart instead, used as the logged-out default collage. If it ever goes stale/disappears,
+// swap in another actively-updated "Global Top 50"-style playlist ID.
+const PUBLIC_TOP_PLAYLIST_ID = '1KNl4AYfgZtOVm9KHkhPTF'; // "Global Top 50 | 2026 Hits" by Topsify
+
+async function fetchUniqueAlbumsFromPlaylist(accessToken, playlistId, needed = 50, maxFetch = 200) {
+  const albumMap = new Map();
+  let offset = 0;
+  const limit = 50;
+  while (albumMap.size < needed && offset < maxFetch) {
+    const url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=${limit}&offset=${offset}`;
+    const resp = await axios.get(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const items = resp.data.items || [];
+    if (items.length === 0) break;
+    for (const item of items) {
+      const track = item.track;
+      if (!track || !track.album) continue;
+      const album = track.album;
+      if (!albumMap.has(album.id)) {
+        const image = (album.images && album.images.length) ? album.images[0].url : null;
+        albumMap.set(album.id, { id: album.id, name: album.name, image, track: track.name, artist: (track.artists || []).map(a => a.name).join(', ') });
+        if (albumMap.size >= needed) break;
+      }
+    }
+    offset += limit;
+    if (offset > 500) break;
+  }
+  return Array.from(albumMap.values());
+}
+
+app.get('/api/public/top', async (req, res) => {
+  const needed = parseInt(req.query.limit || '50', 10);
+  try {
+    const accessToken = await ensureAppAccessToken();
+    const albums = await fetchUniqueAlbumsFromPlaylist(accessToken, PUBLIC_TOP_PLAYLIST_ID, needed);
+    res.json({ albums });
+  } catch (err) {
+    console.error(err.response?.data || err.message);
+    res.status(500).json({ error: 'Failed to fetch global top tracks' });
+  }
+});
+
+app.get('/api/public/search', async (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (!q) return res.json({ tracks: [] });
+  try {
+    const accessToken = await ensureAppAccessToken();
+    const resp = await axios.get('https://api.spotify.com/v1/search', {
+      params: { q, type: 'track', limit: 10 },
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const tracks = (resp.data.tracks?.items || []).map(t => ({
+      id: t.id,
+      name: t.name,
+      artist: (t.artists || []).map(a => a.name).join(', '),
+      image: t.album?.images?.[0]?.url || null,
+      albumName: t.album?.name || ''
+    }));
+    res.json({ tracks });
+  } catch (err) {
+    console.error(err.response?.data || err.message);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
 const VALID_TIME_RANGES = new Set(['short_term', 'medium_term', 'long_term']);
 
 async function fetchTopUniqueAlbums(accessToken, needed = 50, timeRange = 'medium_term', maxFetch = 300) {
